@@ -107,26 +107,41 @@ class ScreenBuffer:
         
         offset = 0
         
+        # Valid 3270 write commands
+        VALID_WRITE_CMDS = (0xF1, 0xF5, 0x7E, 0xF3, 0x6F)
+        
         # Handle TN3270E header (5 bytes)
         # Format: DATA-TYPE(1) + REQUEST(1) + RESPONSE(1) + SEQ(2)
         # DATA-TYPE: 0x00=3270-DATA, 0x01=SCS-DATA, 0x02=RESPONSE, etc.
-        if tn3270e_mode is True and len(data) >= 5:
-            self.tn3270e = True
-            data_type = data[0]
-            offset = 5
-            
-            # Only process 3270-DATA (type 0x00)
-            # Other types (SCS-DATA, RESPONSE, etc.) are not screen data
-            if data_type != 0x00:
+        if tn3270e_mode is True and len(data) >= 6:
+            # Check if this looks like a TN3270E header by verifying
+            # the byte after the header is a valid write command
+            potential_cmd = data[5]
+            if data[0] == 0x00 and potential_cmd in VALID_WRITE_CMDS:
+                # Valid TN3270E 3270-DATA with valid write command
+                self.tn3270e = True
+                offset = 5
+            elif data[0] in VALID_WRITE_CMDS:
+                # No TN3270E header - data starts with write command directly
+                # (hack3270 may strip headers or not use TN3270E for data)
+                logger.debug("TN3270E mode but data starts with write command - no header")
+                self.tn3270e = False
+                offset = 0
+            else:
+                # Check if it might be TN3270E with non-3270 data type
+                if data[0] in (0x01, 0x02, 0x03, 0x04, 0x05):
+                    logger.debug(f"TN3270E non-3270-DATA type: {data[0]:#04x}, skipping")
+                    return
+                # Unknown format
+                logger.warning(f"Unknown data format, first bytes: {data[:6].hex()}")
                 return
                 
         elif tn3270e_mode is None and len(data) >= 5:
             # Auto-detect: TN3270E 3270-DATA starts with 0x00
-            # But need to verify it looks like a TN3270E header
-            # by checking if byte after header is a valid write command
-            if data[0] == 0x00:
-                potential_cmd = data[5] if len(data) > 5 else 0
-                if potential_cmd in (0xF1, 0xF5, 0x7E, 0xF3, 0x6F):
+            # Verify by checking if byte after header is a valid write command
+            if data[0] == 0x00 and len(data) > 5:
+                potential_cmd = data[5]
+                if potential_cmd in VALID_WRITE_CMDS:
                     self.tn3270e = True
                     offset = 5
         
