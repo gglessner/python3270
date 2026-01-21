@@ -110,40 +110,24 @@ class ScreenBuffer:
         # Valid 3270 write commands
         VALID_WRITE_CMDS = (0xF1, 0xF5, 0x7E, 0xF3, 0x6F)
         
-        # Handle TN3270E header (5 bytes)
-        # Format: DATA-TYPE(1) + REQUEST(1) + RESPONSE(1) + SEQ(2)
-        # DATA-TYPE: 0x00=3270-DATA, 0x01=SCS-DATA, 0x02=RESPONSE, etc.
-        if tn3270e_mode is True and len(data) >= 6:
-            # Check if this looks like a TN3270E header by verifying
-            # the byte after the header is a valid write command
-            potential_cmd = data[5]
-            if data[0] == 0x00 and potential_cmd in VALID_WRITE_CMDS:
-                # Valid TN3270E 3270-DATA with valid write command
-                self.tn3270e = True
-                offset = 5
-            elif data[0] in VALID_WRITE_CMDS:
-                # No TN3270E header - data starts with write command directly
-                # (hack3270 may strip headers or not use TN3270E for data)
-                logger.debug("TN3270E mode but data starts with write command - no header")
-                self.tn3270e = False
-                offset = 0
-            else:
-                # Check if it might be TN3270E with non-3270 data type
-                if data[0] in (0x01, 0x02, 0x03, 0x04, 0x05):
-                    logger.debug(f"TN3270E non-3270-DATA type: {data[0]:#04x}, skipping")
-                    return
-                # Unknown format
-                logger.warning(f"Unknown data format, first bytes: {data[:6].hex()}")
-                return
-                
-        elif tn3270e_mode is None and len(data) >= 5:
-            # Auto-detect: TN3270E 3270-DATA starts with 0x00
-            # Verify by checking if byte after header is a valid write command
-            if data[0] == 0x00 and len(data) > 5:
-                potential_cmd = data[5]
-                if potential_cmd in VALID_WRITE_CMDS:
-                    self.tn3270e = True
-                    offset = 5
+        # Find where the write command is - could be at offset 0, 5, or elsewhere
+        # This handles both raw 3270 data and TN3270E encapsulated data
+        write_cmd_offset = None
+        for i in range(min(10, len(data))):
+            if data[i] in VALID_WRITE_CMDS:
+                write_cmd_offset = i
+                break
+        
+        if write_cmd_offset is None:
+            # No valid write command found in first 10 bytes - skip this message
+            logger.debug(f"No write command found, first bytes: {data[:min(10,len(data))].hex()}")
+            return
+        
+        # Set offset to where we found the write command
+        offset = write_cmd_offset
+        self.tn3270e = (write_cmd_offset == 5)  # Likely TN3270E if write cmd at offset 5
+        
+        logger.debug(f"Found write command {data[offset]:#04x} at offset {offset}")
         
         if offset >= len(data):
             logger.debug(f"No data after TN3270E header (offset={offset}, len={len(data)})")
