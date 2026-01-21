@@ -20,6 +20,7 @@ Examples:
 import sys
 import signal
 import argparse
+import logging
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
@@ -40,8 +41,17 @@ def main():
                         help='TN3270 server port (default: 3271)')
     parser.add_argument('-t', '--tls', action='store_true',
                         help='Enable TLS encryption')
+    parser.add_argument('-d', '--debug', action='store_true',
+                        help='Enable debug logging')
     
     args = parser.parse_args()
+    
+    # Set up logging
+    log_level = logging.DEBUG if args.debug else logging.WARNING
+    logging.basicConfig(
+        level=log_level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     
     # Create Qt application
     app = QApplication(sys.argv)

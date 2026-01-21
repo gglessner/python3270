@@ -6,8 +6,11 @@ Copyright (C) 2026 Garland Glessner <gglessner@gmail.com>
 License: GPL-3.0 (see LICENSE)
 """
 
+import logging
 from dataclasses import dataclass, field
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 try:
     from .ebcdic import ebcdic_to_ascii
     from .orders import (
@@ -95,31 +98,47 @@ class ScreenBuffer:
         if len(data) < 3:
             return
         
-        offset = 0
-        
-        # Handle TN3270E header
-        if tn3270e_mode is True:
-            # Explicitly in TN3270E mode - skip 5-byte header
-            if len(data) >= 5:
-                self.tn3270e = True
-                offset = 5
-        elif tn3270e_mode is None:
-            # Auto-detect: check for TN3270E header (starts with 0x00, which is DATA-TYPE)
-            if data[0] == 0x00 and len(data) >= 5:
-                self.tn3270e = True
-                offset = 5
-        # If tn3270e_mode is False, don't skip any header
-        
-        # Skip IAC EOR at end if present
+        # Skip IAC EOR at end if present (do this first)
         if len(data) >= 2 and data[-2] == 0xFF and data[-1] == 0xEF:
             data = data[:-2]
         
+        if len(data) < 1:
+            return
+        
+        offset = 0
+        
+        # Handle TN3270E header (5 bytes)
+        # Format: DATA-TYPE(1) + REQUEST(1) + RESPONSE(1) + SEQ(2)
+        # DATA-TYPE: 0x00=3270-DATA, 0x01=SCS-DATA, 0x02=RESPONSE, etc.
+        if tn3270e_mode is True and len(data) >= 5:
+            self.tn3270e = True
+            data_type = data[0]
+            offset = 5
+            
+            # Only process 3270-DATA (type 0x00)
+            # Other types (SCS-DATA, RESPONSE, etc.) are not screen data
+            if data_type != 0x00:
+                return
+                
+        elif tn3270e_mode is None and len(data) >= 5:
+            # Auto-detect: TN3270E 3270-DATA starts with 0x00
+            # But need to verify it looks like a TN3270E header
+            # by checking if byte after header is a valid write command
+            if data[0] == 0x00:
+                potential_cmd = data[5] if len(data) > 5 else 0
+                if potential_cmd in (0xF1, 0xF5, 0x7E, 0xF3, 0x6F):
+                    self.tn3270e = True
+                    offset = 5
+        
         if offset >= len(data):
+            logger.debug(f"No data after TN3270E header (offset={offset}, len={len(data)})")
             return
         
         # Get write command
         cmd = data[offset]
         offset += 1
+        
+        logger.debug(f"Processing write command: {cmd:#04x}, data length: {len(data)}, offset: {offset}")
         
         # Handle write commands
         if cmd in (WRITE_COMMANDS.ERASE_WRITE, WRITE_COMMANDS.ERASE_WRITE_ALTERNATE):
@@ -131,7 +150,8 @@ class ScreenBuffer:
             # Skip structured fields for now
             return
         elif cmd != WRITE_COMMANDS.WRITE:
-            # Unknown command
+            # Unknown/unhandled command
+            logger.warning(f"Unknown write command: {cmd:#04x}, ignoring message")
             return
         
         # Skip WCC byte
