@@ -110,27 +110,41 @@ class ScreenBuffer:
         # Valid 3270 write commands
         VALID_WRITE_CMDS = (0xF1, 0xF5, 0x7E, 0xF3, 0x6F)
         
-        # Find where the write command is - could be at offset 0, 5, or elsewhere
-        # This handles both raw 3270 data and TN3270E encapsulated data
+        # Valid 3270 orders (for detecting order-only streams)
+        VALID_ORDERS = (0x1D, 0x29, 0x11, 0x28, 0x2C, 0x13, 0x05, 0x3C, 0x12, 0x08)
+        
+        # Find where the write command or orders start
+        # Could be at offset 0 (raw) or offset 5 (after TN3270E header)
         write_cmd_offset = None
+        orders_only_offset = None
+        
         for i in range(min(10, len(data))):
             if data[i] in VALID_WRITE_CMDS:
                 write_cmd_offset = i
                 break
+            # Check if this could be the start of orders (no write command)
+            if orders_only_offset is None and data[i] in VALID_ORDERS:
+                orders_only_offset = i
         
-        if write_cmd_offset is None:
-            # No valid write command found in first 10 bytes - skip this message
-            logger.debug(f"No write command found, first bytes: {data[:min(10,len(data))].hex()}")
+        # Determine starting offset
+        if write_cmd_offset is not None:
+            offset = write_cmd_offset
+            self.tn3270e = (write_cmd_offset == 5)
+            logger.debug(f"Found write command {data[offset]:#04x} at offset {offset}")
+        elif orders_only_offset is not None:
+            # No write command, but found orders - process as incremental update
+            offset = orders_only_offset
+            self.tn3270e = (orders_only_offset == 5)
+            logger.debug(f"No write command, processing orders starting at offset {offset}")
+            # Jump to order processing (no write command or WCC to skip)
+            self._process_orders(data, offset)
+            return
+        else:
+            logger.debug(f"No write command or orders found, first bytes: {data[:min(10,len(data))].hex()}")
             return
         
-        # Set offset to where we found the write command
-        offset = write_cmd_offset
-        self.tn3270e = (write_cmd_offset == 5)  # Likely TN3270E if write cmd at offset 5
-        
-        logger.debug(f"Found write command {data[offset]:#04x} at offset {offset}")
-        
         if offset >= len(data):
-            logger.debug(f"No data after TN3270E header (offset={offset}, len={len(data)})")
+            logger.debug(f"No data after header (offset={offset}, len={len(data)})")
             return
         
         # Get write command
@@ -157,10 +171,13 @@ class ScreenBuffer:
         if offset < len(data):
             offset += 1
         
-        # Current buffer position
-        pos = 0
+        # Process the orders and data
+        self._process_orders(data, offset)
+    
+    def _process_orders(self, data: bytes, offset: int, start_pos: int = 0):
+        """Process 3270 orders and data starting at the given offset."""
+        pos = start_pos
         
-        # Process orders and data
         while offset < len(data):
             byte = data[offset]
             
