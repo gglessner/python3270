@@ -347,6 +347,9 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _send_aid(self, aid_name: str):
         """Send AID key to server"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not self.connection.connected:
             return
         
@@ -354,12 +357,16 @@ class MainWindow(QMainWindow):
         if aid_byte is None:
             return
         
+        logger.debug(f"Sending AID: {aid_name} (0x{aid_byte:02x}), TN3270E mode: {self.connection.tn3270e_mode}")
+        
         # Build response packet
         parts = bytearray()
         
         # TN3270E header if needed
         if self.connection.tn3270e_mode:
-            parts.extend(self.connection.build_tn3270e_header(0x00))
+            header = self.connection.build_tn3270e_header(0x00)
+            parts.extend(header)
+            logger.debug(f"TN3270E header: {header.hex()}")
         
         # AID byte
         parts.append(aid_byte)
@@ -386,6 +393,7 @@ class MainWindow(QMainWindow):
         # IAC EOR
         parts.extend([TELNET.IAC, TELNET.EOR])
         
+        logger.debug(f"Sending packet ({len(parts)} bytes): {bytes(parts).hex()}")
         self.connection.send(bytes(parts))
         
         # Clear modified flags after sending
