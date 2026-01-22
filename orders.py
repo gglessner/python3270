@@ -19,13 +19,43 @@ class ORDERS:
     GE = 0x08   # Graphic Escape
 
 
-# Write commands
+# Write commands - SNA/LU2 format (most common)
 class WRITE_COMMANDS:
     WRITE = 0xF1
     ERASE_WRITE = 0xF5
     ERASE_WRITE_ALTERNATE = 0x7E
     WRITE_STRUCTURED_FIELD = 0xF3
     ERASE_ALL_UNPROTECTED = 0x6F
+
+
+# Write commands - CCW (Channel Command Word) format
+# Some servers use these older command codes
+class WRITE_COMMANDS_CCW:
+    WRITE = 0x01
+    ERASE_WRITE = 0x05
+    ERASE_WRITE_ALTERNATE = 0x0D
+    READ_BUFFER = 0x02
+    READ_MODIFIED = 0x06
+    ERASE_ALL_UNPROTECTED = 0x0F
+
+
+# All valid write commands (both SNA and CCW formats)
+ALL_WRITE_COMMANDS = {
+    # SNA format
+    0xF1: 'WRITE',
+    0xF5: 'ERASE_WRITE',
+    0x7E: 'ERASE_WRITE_ALTERNATE',
+    0xF3: 'WRITE_STRUCTURED_FIELD',
+    0x6F: 'ERASE_ALL_UNPROTECTED',
+    # CCW format
+    0x01: 'WRITE',
+    0x05: 'ERASE_WRITE',
+    0x0D: 'ERASE_WRITE_ALTERNATE',
+    0x0F: 'ERASE_ALL_UNPROTECTED',
+}
+
+# Erase commands (clear screen before write)
+ERASE_COMMANDS = {0xF5, 0x7E, 0x05, 0x0D}
 
 
 # Attention Identifiers (AIDs)

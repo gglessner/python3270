@@ -14,14 +14,14 @@ logger = logging.getLogger(__name__)
 try:
     from .ebcdic import ebcdic_to_ascii
     from .orders import (
-        ORDERS, WRITE_COMMANDS, decode_buffer_address,
-        ATTR_TYPES, COLORS, HIGHLIGHTS, get_default_field_color
+        ORDERS, WRITE_COMMANDS, WRITE_COMMANDS_CCW, ALL_WRITE_COMMANDS, ERASE_COMMANDS,
+        decode_buffer_address, ATTR_TYPES, COLORS, HIGHLIGHTS, get_default_field_color
     )
 except ImportError:
     from ebcdic import ebcdic_to_ascii
     from orders import (
-        ORDERS, WRITE_COMMANDS, decode_buffer_address,
-        ATTR_TYPES, COLORS, HIGHLIGHTS, get_default_field_color
+        ORDERS, WRITE_COMMANDS, WRITE_COMMANDS_CCW, ALL_WRITE_COMMANDS, ERASE_COMMANDS,
+        decode_buffer_address, ATTR_TYPES, COLORS, HIGHLIGHTS, get_default_field_color
     )
 
 
@@ -107,11 +107,9 @@ class ScreenBuffer:
         
         offset = 0
         
-        # Valid 3270 write commands
-        VALID_WRITE_CMDS = (0xF1, 0xF5, 0x7E, 0xF3, 0x6F)
-        
         # Valid 3270 orders (for detecting order-only streams)
-        VALID_ORDERS = (0x1D, 0x29, 0x11, 0x28, 0x2C, 0x13, 0x05, 0x3C, 0x12, 0x08)
+        # Note: 0x05 (PT) is NOT included here because it's also CCW Erase/Write command
+        VALID_ORDERS = (0x1D, 0x29, 0x11, 0x28, 0x2C, 0x13, 0x3C, 0x12, 0x08)
         
         # Find where the write command or orders start
         # Could be at offset 0 (raw) or offset 5 (after TN3270E header)
@@ -119,7 +117,7 @@ class ScreenBuffer:
         orders_only_offset = None
         
         for i in range(min(10, len(data))):
-            if data[i] in VALID_WRITE_CMDS:
+            if data[i] in ALL_WRITE_COMMANDS:
                 write_cmd_offset = i
                 break
             # Check if this could be the start of orders (no write command)
@@ -151,18 +149,19 @@ class ScreenBuffer:
         cmd = data[offset]
         offset += 1
         
-        logger.debug(f"Processing write command: {cmd:#04x}, data length: {len(data)}, offset: {offset}")
+        cmd_name = ALL_WRITE_COMMANDS.get(cmd, 'UNKNOWN')
+        logger.debug(f"Processing write command: {cmd:#04x} ({cmd_name}), data length: {len(data)}, offset: {offset}")
         
-        # Handle write commands
-        if cmd in (WRITE_COMMANDS.ERASE_WRITE, WRITE_COMMANDS.ERASE_WRITE_ALTERNATE):
+        # Handle erase commands (clear screen before write)
+        if cmd in ERASE_COMMANDS:
             self.clear()
-        elif cmd == WRITE_COMMANDS.ERASE_ALL_UNPROTECTED:
+        elif cmd in (WRITE_COMMANDS.ERASE_ALL_UNPROTECTED, WRITE_COMMANDS_CCW.ERASE_ALL_UNPROTECTED):
             self._erase_unprotected()
             return
         elif cmd == WRITE_COMMANDS.WRITE_STRUCTURED_FIELD:
             # Skip structured fields for now
             return
-        elif cmd != WRITE_COMMANDS.WRITE:
+        elif cmd not in ALL_WRITE_COMMANDS:
             # Unknown/unhandled command
             logger.warning(f"Unknown write command: {cmd:#04x}, ignoring message")
             return
