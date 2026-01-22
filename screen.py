@@ -111,18 +111,27 @@ class ScreenBuffer:
         # Note: 0x05 (PT) is NOT included here because it's also CCW Erase/Write command
         VALID_ORDERS = (0x1D, 0x29, 0x11, 0x28, 0x2C, 0x13, 0x3C, 0x12, 0x08)
         
-        # Find where the write command or orders start
-        # Could be at offset 0 (raw) or offset 5 (after TN3270E header)
+        # Determine if this is TN3270E data by checking specific positions
+        # Write commands can only be at offset 0 (raw) or offset 5 (after TN3270E header)
+        # We must NOT scan the TN3270E header bytes (0-4) as they may contain values
+        # that match command codes (e.g., 0x01 in REQUEST field = CCW Write)
         write_cmd_offset = None
-        orders_only_offset = None
         
-        for i in range(min(10, len(data))):
-            if data[i] in ALL_WRITE_COMMANDS:
-                write_cmd_offset = i
-                break
-            # Check if this could be the start of orders (no write command)
-            if orders_only_offset is None and data[i] in VALID_ORDERS:
-                orders_only_offset = i
+        # Check offset 5 first (TN3270E mode) - more common
+        if len(data) > 5 and data[5] in ALL_WRITE_COMMANDS:
+            write_cmd_offset = 5
+        # Check offset 0 (raw 3270 data, no TN3270E header)
+        elif len(data) > 0 and data[0] in ALL_WRITE_COMMANDS:
+            write_cmd_offset = 0
+        
+        # If no write command found, check for order-only streams
+        orders_only_offset = None
+        if write_cmd_offset is None:
+            # Check at offset 5 (after TN3270E header) or offset 0
+            if len(data) > 5 and data[5] in VALID_ORDERS:
+                orders_only_offset = 5
+            elif len(data) > 0 and data[0] in VALID_ORDERS:
+                orders_only_offset = 0
         
         # Determine starting offset
         if write_cmd_offset is not None:
