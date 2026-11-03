@@ -193,11 +193,16 @@ class TN3270E:
     REQUEST = 0x07
     SEND = 0x08
     
-    # Functions
+    # Functions (RFC 2355 section 7; x3270 tn3270e.h). These were DATA-STREAM-CTL 2, RESPONSES 4, SYSREQ 5, so
+    # we asked for SYSREQ + CONTENTION-RESOLUTION while believing we had asked for RESPONSES, and refused a
+    # host's counter-proposal of the real RESPONSES (2). Our own tests used the same numbers, so they agreed.
     FUNC_BIND_IMAGE = 0x00
-    FUNC_DATA_STREAM_CTL = 0x02
-    FUNC_RESPONSES = 0x04
-    FUNC_SYSREQ = 0x05
+    FUNC_DATA_STREAM_CTL = 0x01
+    FUNC_RESPONSES = 0x02
+    FUNC_SCS_CTL_CODES = 0x03
+    FUNC_SYSREQ = 0x04
+    FUNC_CONTENTION_RESOLUTION = 0x05
+    FUNC_SNA_SENSE = 0x06
 
     # DEVICE-TYPE REJECT reason codes (RFC 2355)
     REASON_CONN_PARTNER = 0x00

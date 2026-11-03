@@ -100,9 +100,9 @@ def test_a_zos_style_tn3270e_session_from_logon_to_application():
         host.send(sb(0x08, 0x02))                                            # SEND DEVICE-TYPE
         host.expect(sb(0x02, 0x07, *b'IBM-3278-2-E'))
         host.send(sb(0x02, 0x04, *b'IBM-3278-2-E', 0x01, *b'TCP00001'))      # IS ... CONNECT TCP00001
-        host.expect(sb(0x03, 0x07, 0x00, 0x04, 0x05))                        # FUNCTIONS REQUEST
-        host.send(sb(0x03, 0x07, 0x00, 0x04))                                # counter: BIND-IMAGE, RESPONSES
-        host.expect(sb(0x03, 0x04, 0x00, 0x04))                              # FUNCTIONS IS, as received
+        host.expect(sb(0x03, 0x07, 0x00, 0x02, 0x04))                        # FUNCTIONS REQUEST
+        host.send(sb(0x03, 0x07, 0x00, 0x02))                                # counter: BIND-IMAGE, RESPONSES
+        host.expect(sb(0x03, 0x04, 0x00, 0x02))                              # FUNCTIONS IS, as received
         assert wait_for(lambda: conn.negotiation_complete)
         assert conn.connected_lu == 'TCP00001'
 

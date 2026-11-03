@@ -15,7 +15,7 @@ def sb(*body) -> bytes:
     return bytes([IAC, SB, OPT, *body, IAC, SE])
 
 
-def negotiate(c, functions=(0, 4, 5), lu=b'LU00001'):
+def negotiate(c, functions=(0, 2, 4), lu=b'LU00001'):
     c.feed(bytes([IAC, DO, OPT]))
     c.feed(sb(SEND, DEVICE_TYPE))
     c.feed(sb(DEVICE_TYPE, IS, *b'IBM-3278-2-E', CONNECT, *lu))
@@ -48,10 +48,10 @@ def test_the_rfc_2355_handshake():
     c.feed(sb(SEND, DEVICE_TYPE))
     assert c.socket.take() == sb(DEVICE_TYPE, REQUEST, *b'IBM-3278-2-E')
     c.feed(sb(DEVICE_TYPE, IS, *b'IBM-3278-2-E', CONNECT, *b'TCP00042'))
-    assert c.socket.take() == sb(FUNCTIONS, REQUEST, 0, 4, 5)
+    assert c.socket.take() == sb(FUNCTIONS, REQUEST, 0, 2, 4)
     assert c.connected_lu == 'TCP00042'
-    c.feed(sb(FUNCTIONS, IS, 0, 4, 5))
-    assert c.negotiation_complete and c.negotiated_functions == [0, 4, 5] and c.submode == 'unbound'
+    c.feed(sb(FUNCTIONS, IS, 0, 2, 4))
+    assert c.negotiation_complete and c.negotiated_functions == [0, 2, 4] and c.submode == 'unbound'
 
 
 def test_an_lu_name_is_requested_with_connect():
@@ -70,9 +70,9 @@ def test_a_host_counter_proposal_is_accepted_with_functions_is():
     c.feed(sb(SEND, DEVICE_TYPE))
     c.feed(sb(DEVICE_TYPE, IS, *b'IBM-3278-2-E'))
     c.socket.take()
-    c.feed(sb(FUNCTIONS, REQUEST, 4))                          # host: RESPONSES only
-    assert c.socket.take() == sb(FUNCTIONS, IS, 4)
-    assert c.negotiation_complete and c.negotiated_functions == [4]
+    c.feed(sb(FUNCTIONS, REQUEST, 2))                          # host: RESPONSES only
+    assert c.socket.take() == sb(FUNCTIONS, IS, 2)
+    assert c.negotiation_complete and c.negotiated_functions == [2]
     assert c.submode == '3270'                                 # no BIND-IMAGE: straight to 3270 mode
 
 
@@ -82,8 +82,8 @@ def test_a_counter_proposal_adding_functions_gets_the_overlap():
     c.feed(sb(SEND, DEVICE_TYPE))
     c.feed(sb(DEVICE_TYPE, IS, *b'IBM-3278-2-E'))
     c.socket.take()
-    c.feed(sb(FUNCTIONS, REQUEST, 2, 4))                       # DATA-STREAM-CTL we never asked for
-    assert c.socket.take() == sb(FUNCTIONS, REQUEST, 4)
+    c.feed(sb(FUNCTIONS, REQUEST, 1, 2))                       # DATA-STREAM-CTL we never asked for
+    assert c.socket.take() == sb(FUNCTIONS, REQUEST, 2)
     assert not c.negotiation_complete
 
 
@@ -104,7 +104,7 @@ def test_a_host_adding_functions_in_is_is_refused():
     c.feed(sb(SEND, DEVICE_TYPE))
     c.feed(sb(DEVICE_TYPE, IS, *b'IBM-3278-2-E'))
     c.socket.take()
-    c.feed(sb(FUNCTIONS, IS, 0, 2, 4))
+    c.feed(sb(FUNCTIONS, IS, 0, 1, 2))
     assert c.socket.take() == bytes([IAC, WONT, OPT]) and not c.tn3270e_mode
 
 
@@ -123,7 +123,7 @@ def test_always_response_gets_a_positive_response_with_the_hosts_sequence_number
 
 def test_no_response_and_error_response_on_success_send_nothing():
     c, _, _ = wired()
-    negotiate(c, functions=(4,))
+    negotiate(c, functions=(2,))
     for flag in (TN3270E.RSF_NO_RESPONSE, TN3270E.RSF_ERROR_RESPONSE):
         c.feed(rec(hdr(TN3270E.DT_3270_DATA, rsp=flag), bytes([0xF1, 0xC3])))
     assert c.socket.take() == b''
@@ -131,14 +131,14 @@ def test_no_response_and_error_response_on_success_send_nothing():
 
 def test_a_bad_command_gets_a_negative_response():
     c, _, _ = wired()
-    negotiate(c, functions=(4,))
+    negotiate(c, functions=(2,))
     c.feed(rec(hdr(TN3270E.DT_3270_DATA, rsp=TN3270E.RSF_ERROR_RESPONSE, seq=7), bytes([0x99])))
     assert c.socket.take() == bytes([0x02, 0x00, 0x01, 0x00, 0x07, 0x00, IAC, EOR])         # COMMAND-REJECT
 
 
 def test_a_bad_buffer_address_gets_operation_check():
     c, _, _ = wired()
-    negotiate(c, functions=(4,))
+    negotiate(c, functions=(2,))
     bad_sba = bytes([0xF1, 0xC3, 0x11, 0x3F, 0xFF])                                  # 14-bit address 16383
     c.feed(rec(hdr(TN3270E.DT_3270_DATA, rsp=TN3270E.RSF_ALWAYS_RESPONSE, seq=9), bad_sba))
     assert c.socket.take() == bytes([0x02, 0x00, 0x01, 0x00, 0x09, 0x02, IAC, EOR])
@@ -146,7 +146,7 @@ def test_a_bad_buffer_address_gets_operation_check():
 
 def test_a_read_is_acknowledged_before_its_data():
     c, _, _ = wired()
-    negotiate(c, functions=(4,))
+    negotiate(c, functions=(2,))
     c.feed(rec(hdr(TN3270E.DT_3270_DATA, rsp=TN3270E.RSF_ALWAYS_RESPONSE, seq=3), bytes([0xF6])))  # Read Modified
     out = c.socket.take()
     ack = bytes([0x02, 0x00, 0x00, 0x00, 0x03, 0x00, IAC, EOR])
@@ -156,7 +156,7 @@ def test_a_read_is_acknowledged_before_its_data():
 
 def test_outbound_sequence_numbers_count_and_wrap_at_32767():
     c = make_connection()
-    negotiate(c, functions=(4,))
+    negotiate(c, functions=(2,))
     c._sequence_number = 0x7FFF
     c.send_record(b'\x7d')
     c.send_record(b'\x7d')
@@ -275,7 +275,7 @@ def test_sysreq_in_sscp_mode_toggles_back_with_iac_ao():
 
 def test_sysreq_without_the_sysreq_function_sends_nothing_in_tn3270e():
     c, _, sess = wired()
-    negotiate(c, functions=(4,))
+    negotiate(c, functions=(2,))
     c.feed(rec(hdr(TN3270E.DT_3270_DATA), bytes([0xF5, 0xC3])))
     c.socket.take()
     assert not sess.send_aid('SYSREQ') and c.socket.take() == b''
@@ -284,7 +284,7 @@ def test_sysreq_without_the_sysreq_function_sends_nothing_in_tn3270e():
 def test_the_keyboard_locks_after_an_aid_until_the_host_restores_it():
     """Double Enter used to send two AIDs (a double submit on CICS)."""
     c, s, sess = wired()
-    negotiate(c, functions=(4,))
+    negotiate(c, functions=(2,))
     c.feed(rec(hdr(TN3270E.DT_3270_DATA), bytes([0xF5, 0xC3])))       # WCC C3: keyboard restore
     c.socket.take()
     assert sess.send_aid('ENTER') and s.keyboard_locked

@@ -40,8 +40,8 @@ def test_main_window_session_offscreen():
         host.send(sb(0x08, 0x02))
         host.expect(sb(0x02, 0x07, *b'IBM-3278-2-E'))
         host.send(sb(0x02, 0x04, *b'IBM-3278-2-E'))
-        host.expect(sb(0x03, 0x07, 0x00, 0x04, 0x05))
-        host.send(sb(0x03, 0x04, 0x04))                                   # RESPONSES only: straight to 3270
+        host.expect(sb(0x03, 0x07, 0x00, 0x02, 0x04))
+        host.send(sb(0x03, 0x04, 0x02))                                   # RESPONSES only: straight to 3270
         assert pump(app, lambda: win.connection.negotiation_complete)
 
         ew = (bytes([0xF5, 0xC3, 0x1D, 0x60]) + ascii_to_ebcdic('APPLID')
