@@ -1,75 +1,82 @@
 """
-EBCDIC to ASCII and ASCII to EBCDIC conversion tables
-Based on Code Page 037 (US/Canada)
+EBCDIC <-> Unicode conversion, Code Page 037 (US/Canada)
+
+Uses Python's built-in, complete cp037 codec. The hand-written table this replaces left holes - EBCDIC
+0xBA '[', 0xBB ']', 0xB0 '^', 0x4A cent, 0x5F not-sign and every other Latin-1 character came out as a
+space, and typing them sent a space - which breaks REXX, C and JCL on a real z/OS system.
 
 Copyright (C) 2026 Garland Glessner <gglessner@gmail.com>
 License: GPL-3.0 (see LICENSE)
 """
 
-# EBCDIC to ASCII lookup table (256 entries)
-E2A = [
-    '\x00', '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07', '\x08', '\x09', '\x0A', '\x0B', '\x0C', '\x0D', '\x0E', '\x0F',
-    '\x10', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17', '\x18', '\x19', '\x1A', '\x1B', '\x1C', '\x1D', '\x1E', '\x1F',
-    '\x20', '\x21', '\x22', '\x23', '\x24', '\x25', '\x26', '\x27', '\x28', '\x29', '\x2A', '\x2B', '\x2C', '\x2D', '\x2E', '\x2F',
-    '\x30', '\x31', '\x32', '\x33', '\x34', '\x35', '\x36', '\x37', '\x38', '\x39', '\x3A', '\x3B', '\x3C', '\x3D', '\x3E', '\x3F',
-    ' ',    '\x41', '\x42', '\x43', '\x44', '\x45', '\x46', '\x47', '\x48', '\x49', '\xA2', '.',    '<',    '(',    '+',    '|',
-    '&',    '\x51', '\x52', '\x53', '\x54', '\x55', '\x56', '\x57', '\x58', '\x59', '!',    '$',    '*',    ')',    ';',    '\xAC',
-    '-',    '/',    '\x62', '\x63', '\x64', '\x65', '\x66', '\x67', '\x68', '\x69', '|',    ',',    '%',    '_',    '>',    '?',
-    '\x70', '\x71', '\x72', '\x73', '\x74', '\x75', '\x76', '\x77', '\x78', '`',    ':',    '#',    '@',    "'",    '=',    '"',
-    '\x80', 'a',    'b',    'c',    'd',    'e',    'f',    'g',    'h',    'i',    '\x8A', '\x8B', '\x8C', '\x8D', '\x8E', '\x8F',
-    '\x90', 'j',    'k',    'l',    'm',    'n',    'o',    'p',    'q',    'r',    '\x9A', '\x9B', '\x9C', '\x9D', '\x9E', '\x9F',
-    '\xA0', '~',    's',    't',    'u',    'v',    'w',    'x',    'y',    'z',    '\xAA', '\xAB', '\xAC', '\xAD', '\xAE', '\xAF',
-    '\xB0', '\xB1', '\xB2', '\xB3', '\xB4', '\xB5', '\xB6', '\xB7', '\xB8', '\xB9', '\xBA', '\xBB', '\xBC', '\xBD', '\xBE', '\xBF',
-    '{',    'A',    'B',    'C',    'D',    'E',    'F',    'G',    'H',    'I',    '\xCA', '\xCB', '\xCC', '\xCD', '\xCE', '\xCF',
-    '}',    'J',    'K',    'L',    'M',    'N',    'O',    'P',    'Q',    'R',    '\xDA', '\xDB', '\xDC', '\xDD', '\xDE', '\xDF',
-    '\\',   '\xE1', 'S',    'T',    'U',    'V',    'W',    'X',    'Y',    'Z',    '\xEA', '\xEB', '\xEC', '\xED', '\xEE', '\xEF',
-    '0',    '1',    '2',    '3',    '4',    '5',    '6',    '7',    '8',    '9',    '\xFA', '\xFB', '\xFC', '\xFD', '\xFE', '\xFF',
-]
+CODEPAGE = 'cp037'
 
-# Build reverse lookup: ASCII to EBCDIC
+# EBCDIC byte -> display character (256 entries), and the reverse map (kept for compatibility)
+E2A = [bytes([i]).decode(CODEPAGE) for i in range(256)]
 A2E = {}
-for i, char in enumerate(E2A):
-    if char not in A2E:
-        A2E[char] = i
+for _i, _ch in enumerate(E2A):
+    A2E.setdefault(_ch, _i)
 
-# Add standard ASCII mappings
-A2E.update({
-    ' ': 0x40, '.': 0x4B, '<': 0x4C, '(': 0x4D, '+': 0x4E, '|': 0x4F,
-    '&': 0x50, '!': 0x5A, '$': 0x5B, '*': 0x5C, ')': 0x5D, ';': 0x5E,
-    '-': 0x60, '/': 0x61, ',': 0x6B, '%': 0x6C, '_': 0x6D, '>': 0x6E, '?': 0x6F,
-    '`': 0x79, ':': 0x7A, '#': 0x7B, '@': 0x7C, "'": 0x7D, '=': 0x7E, '"': 0x7F,
-    'a': 0x81, 'b': 0x82, 'c': 0x83, 'd': 0x84, 'e': 0x85, 'f': 0x86, 'g': 0x87, 'h': 0x88, 'i': 0x89,
-    'j': 0x91, 'k': 0x92, 'l': 0x93, 'm': 0x94, 'n': 0x95, 'o': 0x96, 'p': 0x97, 'q': 0x98, 'r': 0x99,
-    '~': 0xA1, 's': 0xA2, 't': 0xA3, 'u': 0xA4, 'v': 0xA5, 'w': 0xA6, 'x': 0xA7, 'y': 0xA8, 'z': 0xA9,
-    '{': 0xC0, 'A': 0xC1, 'B': 0xC2, 'C': 0xC3, 'D': 0xC4, 'E': 0xC5, 'F': 0xC6, 'G': 0xC7, 'H': 0xC8, 'I': 0xC9,
-    '}': 0xD0, 'J': 0xD1, 'K': 0xD2, 'L': 0xD3, 'M': 0xD4, 'N': 0xD5, 'O': 0xD6, 'P': 0xD7, 'Q': 0xD8, 'R': 0xD9,
-    '\\': 0xE0, 'S': 0xE2, 'T': 0xE3, 'U': 0xE4, 'V': 0xE5, 'W': 0xE6, 'X': 0xE7, 'Y': 0xE8, 'Z': 0xE9,
-    '0': 0xF0, '1': 0xF1, '2': 0xF2, '3': 0xF3, '4': 0xF4, '5': 0xF5, '6': 0xF6, '7': 0xF7, '8': 0xF8, '9': 0xF9,
-})
+# 3270 format controls shown as graphics (x3270 shows DUP and FM; everything else below 0x40 is blank)
+_DISPLAY_OVERRIDES = {0x1C: '*', 0x1E: ';'}
+
+
+# Graphic Escape characters: the APL / line-drawing set (x3270 Common/unicode.c apl2uc). The query reply
+# advertises this set, so a host may send e.g. GE 0xAD / 0xBD for '[' / ']' (ISPF does).
+_APL2UC = {
+    0x70: 0x22C4, 0x71: 0x2227, 0x72: 0x00A8, 0x73: 0x233B, 0x74: 0x2378, 0x75: 0x2377, 0x76: 0x22A2,
+    0x77: 0x22A3, 0x78: 0x2228, 0x80: 0x223C, 0x83: 0x23B8, 0x84: 0x23B9, 0x85: 0x2502, 0x8A: 0x2191,
+    0x8B: 0x2193, 0x8C: 0x2264, 0x8D: 0x2308, 0x8E: 0x230A, 0x8F: 0x2192, 0x90: 0x2395, 0x91: 0x258C,
+    0x92: 0x2590, 0x93: 0x2580, 0x94: 0x2584, 0x95: 0x25A0, 0x9A: 0x2283, 0x9B: 0x2282, 0x9C: 0x00A4,
+    0x9D: 0x25CB, 0x9E: 0x00B1, 0x9F: 0x2190, 0xA0: 0x00AF, 0xA1: 0x00B0, 0xA2: 0x2500, 0xA3: 0x2022,
+    0xAA: 0x2229, 0xAB: 0x222A, 0xAC: 0x22A5, 0xAD: 0x005B, 0xAE: 0x2265, 0xAF: 0x2218, 0xB0: 0x237A,
+    0xB1: 0x220A, 0xB2: 0x2373, 0xB3: 0x2374, 0xB4: 0x2375, 0xB6: 0x00D7, 0xB7: 0x005C, 0xB8: 0x00F7,
+    0xBA: 0x2207, 0xBB: 0x2206, 0xBC: 0x22A4, 0xBD: 0x005D, 0xBE: 0x2260, 0xBF: 0x2223, 0xC0: 0x007B,
+    0xC1: 0x207C, 0xC2: 0x002B, 0xC3: 0x220E, 0xC4: 0x2514, 0xC5: 0x250C, 0xC6: 0x251C, 0xC7: 0x2534,
+    0xC8: 0x00A7, 0xCA: 0x2372, 0xCB: 0x2371, 0xCC: 0x2337, 0xCD: 0x233D, 0xCE: 0x2342, 0xCF: 0x2349,
+    0xD0: 0x007D, 0xD1: 0x207E, 0xD2: 0x002D, 0xD3: 0x253C, 0xD4: 0x2518, 0xD5: 0x2510, 0xD6: 0x2524,
+    0xD7: 0x252C, 0xD8: 0x00B6, 0xDB: 0x0021, 0xDC: 0x2352, 0xDD: 0x234B, 0xDE: 0x235E, 0xDF: 0x235D,
+    0xE0: 0x2261, 0xE1: 0x2081, 0xE2: 0x0282, 0xE3: 0x0283, 0xE4: 0x2364, 0xE5: 0x2365, 0xE6: 0x236A,
+    0xE7: 0x20AC, 0xEA: 0x233F, 0xEB: 0x2340, 0xEC: 0x2235, 0xED: 0x2296, 0xEE: 0x2339, 0xEF: 0x2355,
+    0xF0: 0x2070, 0xF1: 0x00B9, 0xF2: 0x00B2, 0xF3: 0x00B3, 0xF4: 0x2074, 0xF5: 0x2075, 0xF6: 0x2076,
+    0xF7: 0x2077, 0xF8: 0x2078, 0xF9: 0x2079, 0xFB: 0x236B, 0xFC: 0x2359, 0xFD: 0x235F, 0xFE: 0x234E,
+}
+
+
+def ge_to_char(ebcdic_byte: int) -> str:
+    """Display character for a Graphic Escape (APL set) byte; unknown codes fall back to the code page."""
+    uc = _APL2UC.get(ebcdic_byte)
+    return chr(uc) if uc else ebcdic_to_ascii(ebcdic_byte)
 
 
 def ebcdic_to_ascii(ebcdic_byte: int) -> str:
-    """Convert single EBCDIC byte to ASCII character"""
-    if 0 <= ebcdic_byte <= 255:
-        char = E2A[ebcdic_byte]
-        # Return space for non-printable characters
-        if ord(char) < 0x20 or ord(char) > 0x7E:
-            return ' '
-        return char
-    return ' '
+    """Convert a single EBCDIC byte to a display character: nulls and control codes show as a space."""
+    if not 0 <= ebcdic_byte <= 255:
+        return ' '
+    if ebcdic_byte in _DISPLAY_OVERRIDES:
+        return _DISPLAY_OVERRIDES[ebcdic_byte]
+    if ebcdic_byte < 0x40 or ebcdic_byte == 0xFF:
+        return ' '
+    return E2A[ebcdic_byte]
 
 
 def ascii_to_ebcdic(text: str) -> bytes:
-    """Convert ASCII string to EBCDIC bytes"""
-    result = []
-    for char in text:
-        if char in A2E:
-            result.append(A2E[char])
-        else:
-            result.append(0x40)  # Default to space
-    return bytes(result)
+    """Convert a string to EBCDIC bytes; a character cp037 can't represent becomes a space (0x40)."""
+    out = bytearray()
+    for ch in text:
+        try:
+            out += ch.encode(CODEPAGE)
+        except UnicodeEncodeError:
+            out.append(0x40)
+    return bytes(out)
+
+
+def char_to_ebcdic(ch: str) -> int:
+    """One typed character -> its EBCDIC byte (0x40 when cp037 has no such character)."""
+    b = ascii_to_ebcdic(ch[:1])
+    return b[0] if b else 0x40
 
 
 def ebcdic_bytes_to_ascii(data: bytes) -> str:
-    """Convert EBCDIC bytes to ASCII string"""
+    """Convert EBCDIC bytes to a display string."""
     return ''.join(ebcdic_to_ascii(b) for b in data)

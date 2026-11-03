@@ -41,6 +41,8 @@ def main():
                         help='TN3270 server port (default: 3271)')
     parser.add_argument('-t', '--tls', action='store_true',
                         help='Enable TLS encryption')
+    parser.add_argument('-l', '--lu', default=None,
+                        help='LU name to request (TN3270E CONNECT); default: any')
     parser.add_argument('-d', '--debug', action='store_true',
                         help='Enable debug logging')
     
@@ -81,7 +83,8 @@ def main():
     window.server_input.setText(args.host)
     window.port_input.setText(str(args.port))
     window.tls_checkbox.setChecked(args.tls)
-    
+    window.connection.lu_name = args.lu
+
     # Auto-connect if host was specified on command line
     if len(sys.argv) > 1 and args.host != '127.0.0.1':
         window.connection.connect(args.host, args.port, args.tls)

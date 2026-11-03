@@ -11,21 +11,29 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QCheckBox, QFrame,
     QSizePolicy
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QObject, Signal
 from PySide6.QtGui import QFont
 
 try:
     from .screen import ScreenBuffer
     from .connection import TN3270Connection
+    from .session import TN3270Session
     from .terminal_widget import TerminalWidget
-    from .orders import AIDS, ORDERS, TELNET, TN3270E, encode_buffer_address
-    from .ebcdic import ascii_to_ebcdic
 except ImportError:
     from screen import ScreenBuffer
     from connection import TN3270Connection
+    from session import TN3270Session
     from terminal_widget import TerminalWidget
-    from orders import AIDS, ORDERS, TELNET, TN3270E, encode_buffer_address
-    from ebcdic import ascii_to_ebcdic
+
+
+class _NetBridge(QObject):
+    """Carries connection callbacks (fired on the receive thread) to the GUI thread as queued signals.
+    Touching widgets or the screen buffer from the receive thread races the painter and can crash Qt."""
+    record = Signal(object)
+    connected = Signal()
+    disconnected = Signal()
+    error = Signal(str)
+    state = Signal()
 
 
 class KeyboardBar(QFrame):
@@ -53,7 +61,7 @@ class KeyboardBar(QFrame):
         layout.addStretch()
         
         # Special keys
-        for key in ['Enter', 'Clear', 'PA1', 'PA2', 'PA3']:
+        for key in ['Enter', 'Clear', 'PA1', 'PA2', 'PA3', 'SysReq', 'Attn', 'Reset']:
             btn = QPushButton(key)
             btn.setFixedWidth(50)
             btn.setStyleSheet(self._button_style())
@@ -109,11 +117,11 @@ class StatusBar(QFrame):
         self.mode_label.setStyleSheet("color: #888;")
         layout.addWidget(self.mode_label)
     
-    def set_connected(self, connected: bool, tn3270e: bool = False):
+    def set_connected(self, connected: bool, tn3270e: bool = False, detail: str = ""):
         if connected:
             self.status_label.setText("CONNECTED")
             self.status_label.setStyleSheet("color: #33ff33;")
-            self.mode_label.setText("TN3270E" if tn3270e else "TN3270")
+            self.mode_label.setText(("TN3270E" if tn3270e else "TN3270") + (f"  {detail}" if detail else ""))
         else:
             self.status_label.setText("DISCONNECTED")
             self.status_label.setStyleSheet("color: #ff6666;")
@@ -157,15 +165,23 @@ class MainWindow(QMainWindow):
             }
         """)
         
-        # Create screen buffer and connection
+        # Create screen buffer, connection and the session that ties them together
         self.screen = ScreenBuffer()
         self.connection = TN3270Connection()
-        
-        # Set up connection callbacks
-        self.connection.on_data = self._on_data
-        self.connection.on_connect = self._on_connect
-        self.connection.on_disconnect = self._on_disconnect
-        self.connection.on_error = self._on_error
+        self.session = TN3270Session(self.connection, self.screen)
+
+        # Connection callbacks fire on the receive thread: hop to the GUI thread through queued signals
+        self._net = _NetBridge()
+        self._net.record.connect(self._on_record)
+        self._net.connected.connect(self._on_connect)
+        self._net.disconnected.connect(self._on_disconnect)
+        self._net.error.connect(self._on_error)
+        self._net.state.connect(self._on_state)
+        self.connection.on_record = self._net.record.emit
+        self.connection.on_connect = self._net.connected.emit
+        self.connection.on_disconnect = self._net.disconnected.emit
+        self.connection.on_error = self._net.error.emit
+        self.connection.on_state = self._net.state.emit
         
         # Build UI
         self._build_ui()
@@ -302,10 +318,24 @@ class MainWindow(QMainWindow):
         for btn in self.keyboard_bar.buttons.values():
             btn.setEnabled(True)
         
-        self.status_bar.set_connected(True, self.connection.tn3270e_mode)
-        
+        self._on_state()
+
         # Focus terminal for immediate typing
         self.terminal.setFocus()
+
+    def _on_state(self):
+        """Negotiation / bind state changed: show mode, LU and SSCP/3270 state."""
+        if not self.connection.connected:
+            return
+        c = self.connection
+        bits = []
+        if c.tn3270e_mode:
+            if c.connected_lu:
+                bits.append(f"LU {c.connected_lu}")
+            bits.append({'sscp': 'SSCP-LU', '3270': '3270', 'nvt': 'NVT', 'unbound': 'unbound'}.get(c.submode, ''))
+        if self.screen.keyboard_locked:
+            bits.append("X SYSTEM")             # waiting for the host (Ctrl+R / Reset unlocks)
+        self.status_bar.set_connected(True, c.tn3270e_mode, "  ".join(b for b in bits if b))
     
     def _on_disconnect(self):
         """Handle disconnection"""
@@ -333,72 +363,39 @@ class MainWindow(QMainWindow):
         self.port_input.setEnabled(True)
         self.tls_checkbox.setEnabled(True)
     
-    def _on_data(self, data: bytes):
-        """Handle incoming 3270 data"""
-        self.screen.process_data(data, tn3270e_mode=self.connection.tn3270e_mode)
+    def _on_record(self, record):
+        """A host record (GUI thread): process it, answer it, repaint."""
+        self.session.handle_record(record)
         self.terminal.set_cursor_pos(self.screen.cursor_pos)
+        if self.screen.alarm:
+            self.screen.alarm = False
+            from PySide6.QtWidgets import QApplication
+            QApplication.beep()
         self.terminal.update()
-        self.status_bar.set_connected(True, self.connection.tn3270e_mode)
-    
+        self._on_state()
+
     def _on_cursor_moved(self, pos: int):
         """Handle cursor movement"""
         self.status_bar.set_cursor(pos)
-    
+
     @Slot(str)
     def _send_aid(self, aid_name: str):
-        """Send AID key to server"""
-        import logging
-        logger = logging.getLogger(__name__)
-        
+        """Send an AID key: AID + cursor + modified fields (the MDTs stay set until the host resets them,
+        as on a real 3270 - CICS relies on that)."""
         if not self.connection.connected:
             return
-        
-        aid_byte = AIDS.get(aid_name)
-        if aid_byte is None:
-            return
-        
-        logger.debug(f"Sending AID: {aid_name} (0x{aid_byte:02x}), TN3270E mode: {self.connection.tn3270e_mode}")
-        
-        # Build response packet
-        parts = bytearray()
-        
-        # TN3270E header if needed
-        if self.connection.tn3270e_mode:
-            header = self.connection.build_tn3270e_header(0x00)
-            parts.extend(header)
-            logger.debug(f"TN3270E header: {header.hex()}")
-        
-        # AID byte
-        parts.append(aid_byte)
-        
-        # Cursor address
-        cursor_addr = encode_buffer_address(self.terminal.cursor_pos)
-        parts.extend(cursor_addr)
-        
-        # For short-read AIDs, don't include field data
-        short_read_aids = ['PA1', 'PA2', 'PA3', 'CLEAR']
-        if aid_name not in short_read_aids:
-            if self.screen.is_unformatted():
-                # Unformatted mode
-                data = self.screen.get_unformatted_data()
-                if data:
-                    parts.extend(ascii_to_ebcdic(data))
-            else:
-                # Formatted mode - include modified fields
-                for field in self.screen.get_modified_fields():
-                    parts.append(ORDERS.SBA)
-                    parts.extend(encode_buffer_address(field['start_pos']))
-                    parts.extend(ascii_to_ebcdic(field['data']))
-        
-        # IAC EOR
-        parts.extend([TELNET.IAC, TELNET.EOR])
-        
-        logger.debug(f"Sending packet ({len(parts)} bytes): {bytes(parts).hex()}")
-        self.connection.send(bytes(parts))
-        
-        # Clear modified flags after sending
-        self.screen.clear_modified_flags()
-        
+        key = aid_name.upper()
+        if key == 'RESET':
+            self.session.reset()
+        elif key == 'ATTN':
+            self.session.send_attn()
+        else:
+            self.screen.cursor_pos = self.terminal.cursor_pos
+            self.session.send_aid(key)
+        self.terminal.set_cursor_pos(self.screen.cursor_pos)
+        self.terminal.update()
+        self._on_state()
+
         # Return focus to terminal
         self.terminal.setFocus()
     

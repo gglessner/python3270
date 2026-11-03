@@ -33,7 +33,7 @@ class TerminalWidget(QWidget):
     """24x80 3270 terminal display widget"""
     
     # Signals
-    aid_pressed = Signal(str)      # AID key pressed (ENTER, PF1, etc.)
+    aid_pressed = Signal(str)      # AID key pressed (ENTER, PF1, etc.; also RESET / ATTN / SYSREQ)
     char_typed = Signal(str)       # Character typed
     cursor_moved = Signal(int)     # Cursor position changed
     
@@ -104,8 +104,9 @@ class TerminalWidget(QWidget):
         self.setMaximumSize(width, height)
     
     def set_cursor_pos(self, pos: int):
-        """Set cursor position"""
+        """Set cursor position (the screen's cursor is the one sent with an AID, so keep them the same)"""
         self.cursor_pos = pos % (self.ROWS * self.COLS)
+        self.screen.cursor_pos = self.cursor_pos
         self.cursor_visible = True
         self.update()
         self.cursor_moved.emit(self.cursor_pos)
@@ -195,8 +196,11 @@ class TerminalWidget(QWidget):
             self.aid_pressed.emit(f'PF{fn}')
             return
         
-        # PA keys (Ctrl + 1/2/3)
+        # PA keys (Ctrl + 1/2/3); Reset (Ctrl+R) unlocks the keyboard
         if modifiers & Qt.ControlModifier:
+            if key == Qt.Key_R:
+                self.aid_pressed.emit('RESET')
+                return
             if key == Qt.Key_1:
                 self.aid_pressed.emit('PA1')
                 return
@@ -217,13 +221,12 @@ class TerminalWidget(QWidget):
             self.aid_pressed.emit('CLEAR')
             return
         
-        # Tab
+        # Tab / back-tab (Qt delivers Shift+Tab as Key_Backtab)
+        if key == Qt.Key_Backtab or (key == Qt.Key_Tab and modifiers & Qt.ShiftModifier):
+            self.set_cursor_pos(self.screen.get_prev_input_field(self.cursor_pos))
+            return
         if key == Qt.Key_Tab:
-            if modifiers & Qt.ShiftModifier:
-                new_pos = self.screen.get_prev_input_field(self.cursor_pos)
-            else:
-                new_pos = self.screen.get_next_input_field(self.cursor_pos)
-            self.set_cursor_pos(new_pos)
+            self.set_cursor_pos(self.screen.get_next_input_field(self.cursor_pos))
             return
         
         # Arrow keys
@@ -245,34 +248,47 @@ class TerminalWidget(QWidget):
             self.set_cursor_pos(self.screen.get_first_input_field())
             return
         
-        # Backspace
+        # Keyboard locked (waiting for the host after an AID): no edits until the host - or Reset - unlocks it
+        if self.screen.keyboard_locked:
+            return
+
+        # Erase EOF (Ctrl+Delete): null to the end of the field
+        if key == Qt.Key_Delete and modifiers & Qt.ControlModifier:
+            self.screen.erase_eof(self.cursor_pos)
+            self.update()
+            return
+
+        # Backspace: erase the character to the left, shifting the field (respects protection, sets MDT)
         if key == Qt.Key_Backspace:
             new_pos = (self.cursor_pos - 1 + 1920) % 1920
-            self.screen.cells[new_pos].char = ' '
-            self.set_cursor_pos(new_pos)
+            if self.screen.delete_char(new_pos):
+                self.set_cursor_pos(new_pos)
             self.update()
             return
-        
-        # Delete
+
+        # Delete: remove the character under the cursor, shifting the field
         if key == Qt.Key_Delete:
-            self.screen.cells[self.cursor_pos].char = ' '
+            self.screen.delete_char(self.cursor_pos)
             self.update()
             return
-        
+
         # Regular character input
         text = event.text()
         if text and len(text) == 1 and text.isprintable():
-            cell = self.screen.cells[self.cursor_pos]
-            
-            # Check if we can type here
-            if cell.is_protected or cell.is_field_start:
+            # The screen refuses protected positions and sets the field's MDT
+            if not self.screen.type_char(self.cursor_pos, text):
                 return
-            
-            # Update cell
-            cell.char = text
-            self.screen.mark_field_modified(self.cursor_pos)
-            
-            # Move cursor
-            self.set_cursor_pos((self.cursor_pos + 1) % 1920)
+
+            # Move cursor; skip to the next input field when the field is full
+            new_pos = (self.cursor_pos + 1) % 1920
+            if new_pos == 0 and self.screen.sscp_mode:
+                # SSCP-LU input at the bottom-right: scroll up a line, input start moves with it (x3270)
+                self.screen._scroll_up()
+                self.screen.sscp_start = max(0, self.screen.sscp_start - self.COLS)
+                self.screen._refresh()
+                new_pos = (self.ROWS - 1) * self.COLS
+            elif self.screen.cells[new_pos].is_field_start:
+                new_pos = self.screen.get_next_input_field(self.cursor_pos)
+            self.set_cursor_pos(new_pos)
             self.char_typed.emit(text)
             self.update()

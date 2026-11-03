@@ -58,6 +58,70 @@ ALL_WRITE_COMMANDS = {
 ERASE_COMMANDS = {0xF5, 0x7E, 0x05, 0x0D}
 
 
+# Every 3270 command a host can send, SNA and CCW codes (IBM GA23-0059; x3270 3270ds.h). The read commands
+# (RB/RM/RMA) need an answer from us; ignoring them leaves the host waiting forever.
+class COMMANDS:
+    W = (0xF1, 0x01)                # write
+    EW = (0xF5, 0x05)               # erase/write
+    EWA = (0x7E, 0x0D)              # erase/write alternate
+    EAU = (0x6F, 0x0F)              # erase all unprotected
+    WSF = (0xF3, 0x11)              # write structured field
+    RB = (0xF2, 0x02)               # read buffer
+    RM = (0xF6, 0x06)               # read modified
+    RMA = (0x6E, 0x0E)              # read modified all
+    NOP = (0x03,)                   # no-op
+
+
+# Write Control Character bits
+class WCC:
+    RESET = 0x40
+    START_PRINTER = 0x08
+    SOUND_ALARM = 0x04
+    KEYBOARD_RESTORE = 0x02
+    RESET_MDT = 0x01
+
+
+# Format control orders: stored in the buffer like data (x3270 ctlr_write)
+FORMAT_CONTROLS = frozenset([0x00, 0x0C, 0x0D, 0x15, 0x19, 0x1C, 0x1E, 0x25, 0x3F, 0xFF])
+
+
+# Structured fields (outbound, host -> terminal)
+class SF:
+    READ_PART = 0x01
+    ERASE_RESET = 0x03
+    SET_REPLY_MODE = 0x09
+    CREATE_PART = 0x0C
+    OUTBOUND_DS = 0x40
+    # Read Partition types
+    RP_QUERY = 0x02
+    RP_QLIST = 0x03
+    # Query List request types
+    RPQ_LIST = 0x00
+    RPQ_EQUIV = 0x40
+    RPQ_ALL = 0x80
+    # Erase/Reset
+    ER_DEFAULT = 0x00
+    ER_ALT = 0x80
+    # Reply modes
+    SRM_FIELD = 0x00
+    SRM_XFIELD = 0x01
+    SRM_CHAR = 0x02
+
+
+# Special AIDs
+AID_NO = 0x60                       # no AID yet (the reply AID for a host Read before any key)
+AID_QREPLY = 0x61                   # Read Partition RB/RM/RMA
+AID_SF = 0x88                       # structured field (query reply)
+
+
+# Result of processing one host data stream record (x3270 enum pds)
+class PDS:
+    OKAY_NO_OUTPUT = 0              # processed; nothing was sent
+    OKAY_OUTPUT = 1                 # processed; a reply (read / query) was sent
+    BAD_CMD = -1                    # unknown command / structured field
+    BAD_ADDR = -2                   # buffer address out of range / record too short
+
+
 # Attention Identifiers (AIDs)
 AIDS = {
     'ENTER': 0x7D,
@@ -70,8 +134,8 @@ AIDS = {
     'PA1': 0x6C, 'PA2': 0x6E, 'PA3': 0x6B,
     'CLEAR': 0x6D,
     'SYSREQ': 0xF0,
-    'ATTN': 0x00,
 }
+# (ATTN is not an AID: it is a telnet signal - see TN3270Session.send_attn.)
 
 
 # Telnet constants
@@ -82,6 +146,15 @@ class TELNET:
     WONT = 0xFC
     WILL = 0xFB
     SB = 0xFA
+    GA = 0xF9
+    EL = 0xF8
+    EC = 0xF7
+    AYT = 0xF6
+    AO = 0xF5                       # abort output: the TN3270E SYSREQ key (x3270 net_abort)
+    IP = 0xF4
+    BRK = 0xF3
+    DM = 0xF2
+    NOP = 0xF1
     SE = 0xF0
     EOR = 0xEF
 
@@ -89,12 +162,14 @@ class TELNET:
 # Telnet options
 class TELNET_OPTIONS:
     BINARY = 0x00
+    TIMING_MARK = 0x06              # z/OS TN3270 TIMEMARK keepalive: must be answered
     TERMINAL_TYPE = 0x18
     EOR = 0x19
     TN3270E = 0x28
-    
+
     _NAMES = {
         0x00: 'BINARY',
+        0x06: 'TIMING-MARK',
         0x18: 'TERMINAL-TYPE',
         0x19: 'EOR',
         0x28: 'TN3270E',
@@ -123,9 +198,45 @@ class TN3270E:
     FUNC_DATA_STREAM_CTL = 0x02
     FUNC_RESPONSES = 0x04
     FUNC_SYSREQ = 0x05
-    
-    # Header for 3270 data (data-type=0x00, request=0x00, response=0x00, seq=0x0000, data-type-indicator=0x01)
-    HEADER = bytes([0x00, 0x00, 0x00, 0x00, 0x01])
+
+    # DEVICE-TYPE REJECT reason codes (RFC 2355)
+    REASON_CONN_PARTNER = 0x00
+    REASON_DEVICE_IN_USE = 0x01
+    REASON_INV_ASSOCIATE = 0x02
+    REASON_INV_DEVICE_NAME = 0x03
+    REASON_INV_DEVICE_TYPE = 0x04
+    REASON_TYPE_NAME_ERROR = 0x05
+    REASON_UNKNOWN_ERROR = 0x06
+    REASON_UNSUPPORTED_REQ = 0x07
+
+    # Header data types
+    DT_3270_DATA = 0x00
+    DT_SCS_DATA = 0x01
+    DT_RESPONSE = 0x02
+    DT_BIND_IMAGE = 0x03
+    DT_UNBIND = 0x04
+    DT_NVT_DATA = 0x05
+    DT_REQUEST = 0x06
+    DT_SSCP_LU_DATA = 0x07
+    DT_PRINT_EOJ = 0x08
+
+    # Header response flags (3270-DATA from the host / RESPONSE from us)
+    RSF_NO_RESPONSE = 0x00
+    RSF_ERROR_RESPONSE = 0x01
+    RSF_ALWAYS_RESPONSE = 0x02
+    RSF_POSITIVE_RESPONSE = 0x00
+    RSF_NEGATIVE_RESPONSE = 0x01
+    # Header request flag
+    RQF_KEYBOARD_RESTORE = 0x02     # (DATA-STREAM-CTL) unlock the keyboard after this record
+    # RESPONSE data byte
+    POS_DEVICE_END = 0x00
+    NEG_COMMAND_REJECT = 0x00
+    NEG_INTERVENTION_REQUIRED = 0x01
+    NEG_OPERATION_CHECK = 0x02
+    NEG_COMPONENT_DISCONNECTED = 0x03
+
+    HEADER_SIZE = 5
+    SEQ_MASK = 0x7FFF               # RFC 2355: the counter wraps to zero after 32767
 
 
 # Extended attribute types
@@ -211,15 +322,14 @@ ADDR_DECODE = {v: i for i, v in enumerate(ADDR_TABLE)}
 
 
 def decode_buffer_address(b1: int, b2: int) -> int:
-    """Decode 2-byte buffer address to screen position"""
-    # Check for 14-bit addressing (high bit set)
-    if b1 & 0xC0 == 0x00:
+    """Decode 2-byte buffer address to screen position (x3270 DECODE_BADDR).
+
+    14-bit addressing when the top two bits of the first byte are 00 (the query reply advertises 12/14-bit
+    addressing, so a host may use it). Otherwise 12-bit: the low six bits of each byte, whatever the graphic in
+    the top two - lenient like x3270, where a table lookup would turn an unexpected code byte into address 0."""
+    if (b1 & 0xC0) == 0x00:
         return ((b1 & 0x3F) << 8) | b2
-    
-    # 12-bit addressing
-    high = ADDR_DECODE.get(b1, 0)
-    low = ADDR_DECODE.get(b2, 0)
-    return (high << 6) | low
+    return ((b1 & 0x3F) << 6) | (b2 & 0x3F)
 
 
 def encode_buffer_address(addr: int) -> bytes:

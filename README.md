@@ -48,12 +48,21 @@ This opens the terminal with default connection settings (127.0.0.1:3271).
 ### Command Line Options
 
 ```
-python python3270.py [host] [port] [-t]
+python python3270.py [host] [port] [-t] [-l LU]
 
 Arguments:
   host          TN3270 server hostname or IP (default: 127.0.0.1)
   port          TN3270 server port (default: 3271)
   -t, --tls     Enable TLS/SSL encryption
+  -l, --lu      LU name to request (TN3270E CONNECT); default: any
+  -d, --debug   Debug logging (telnet negotiation, records sent and received)
+```
+
+### Tests
+
+```bash
+pip install pytest
+python -m pytest tests        # the GUI smoke test runs offscreen (QT_QPA_PLATFORM=offscreen)
 ```
 
 ### Examples
@@ -107,9 +116,24 @@ python python3270.py public.hercules.example.com 3270
 
 | Key | Action |
 |-----|--------|
-| Backspace | Delete character to the left |
-| Delete | Delete character at cursor |
-| Any character | Insert at cursor position |
+| Backspace | Erase the character to the left (the rest of the field shifts left) |
+| Delete | Delete the character at the cursor (the rest of the field shifts left) |
+| Ctrl+Delete | Erase EOF (clear from the cursor to the end of the field) |
+| Any character | Type at the cursor (refused in protected fields) |
+
+Editing marks the field modified (MDT), so a field you clear is sent to the host as empty. MDTs stay set until
+the host resets them, as on a real 3270.
+
+### Other keys (keyboard bar)
+
+| Button / key | Action |
+|--------------|--------|
+| SysReq | TN3270E: telnet IAC AO (the SYSREQ function; also toggles back from the SSCP session); plain TN3270: the 3270 test request |
+| Attn | TN3270E: telnet IAC IP; plain TN3270: PA1 then telnet BREAK (as PCOMM does) |
+| Reset / Ctrl+R | Unlock the keyboard |
+
+After an AID key the keyboard locks (the status bar shows `X SYSTEM`) until the host's write unlocks it, as on a
+real 3270 - so a double Enter can't submit twice. Reset unlocks it by hand.
 
 ## User Interface
 
@@ -133,7 +157,7 @@ The top bar contains:
 
 Clickable buttons for all function keys:
 - PF1-PF12 buttons
-- Enter, Clear, PA1, PA2, PA3 buttons
+- Enter, Clear, PA1, PA2, PA3, SysReq, Attn buttons
 
 ### Status Bar
 
@@ -158,52 +182,67 @@ When explicit colors are sent by the host, those override the defaults.
 
 ## TN3270E Protocol
 
-python3270 implements the TN3270E protocol (RFC 2355) including:
+python3270 implements TN3270 (RFC 1576) and TN3270E (RFC 2355), checked against the open-source x3270 emulator:
 
-### Negotiation
-- Terminal type: IBM-3278-2-E
-- Binary transmission
-- End-of-record markers
-- TN3270E functions (BIND-IMAGE, RESPONSES, SYSREQ)
+### Telnet
+- A byte-level telnet state machine: IAC IAC un-escaped inside records, telnet commands recognised anywhere
+  (e.g. an IAC NOP keepalive), IAC EOR ends a record; every outbound record has its 0xFF bytes doubled
+- Terminal type IBM-3278-2-E; BINARY and EOR; options answered once (no negotiation loops)
+- TIMING-MARK answered (the z/OS TN3270 server's TIMEMARK keepalive)
 
-### Write Commands
-- Write (F1)
-- Erase/Write (F5)
-- Erase/Write Alternate (7E)
-- Erase All Unprotected (6F)
-- Write Structured Field (F3)
+### TN3270E negotiation
+- DEVICE-TYPE REQUEST (optionally CONNECT <LU>: `--lu`); DEVICE-TYPE IS (the LU the host assigned is shown)
+- DEVICE-TYPE REJECT backs off with WONT TN3270E, so the host falls back to plain TN3270
+- FUNCTIONS REQUEST BIND-IMAGE, RESPONSES, SYSREQ; a host counter-proposal is answered with FUNCTIONS IS (or the
+  overlap), as RFC 2355 requires
+
+### TN3270E records
+- 3270-DATA, BIND-IMAGE, UNBIND, SSCP-LU-DATA (the VTAM logon screen), NVT-DATA
+- RESPONSES: a host record flagged ALWAYS-RESPONSE gets a positive response (DEVICE-END) with its sequence
+  number; a bad command or address gets a negative response (COMMAND-REJECT / OPERATION-CHECK)
+- SSCP-LU mode: logon input is sent as SSCP-LU-DATA text, the way a 3270 does before an application is bound
+- Outbound sequence numbers count and wrap at 32767
+
+### 3270 commands
+- Write, Erase/Write, Erase/Write Alternate, Erase All Unprotected, Write Structured Field, No-op
+- Read Buffer, Read Modified, Read Modified All (the host asks; the terminal answers)
+- WCC: reset MDT, keyboard restore, sound alarm
 
 ### Orders
-- Set Buffer Address (SBA)
-- Start Field (SF)
-- Start Field Extended (SFE)
-- Set Attribute (SA)
-- Modify Field (MF)
-- Insert Cursor (IC)
-- Program Tab (PT)
-- Repeat to Address (RA)
-- Erase Unprotected to Address (EUA)
-- Graphic Escape (GE)
+- SBA (12- and 14-bit addresses; an out-of-range address is a write error, not a crash), SF, SFE, SA, MF, IC,
+  PT, RA (including RA with GE, and RA to the start address = the whole buffer), EUA, GE, format controls
+
+### Structured fields
+- Read Partition: Query, Query List, and Read Buffer / Read Modified / Read Modified All
+- Erase/Reset, Set Reply Mode, Outbound 3270DS
 
 ### Query Reply
-Automatic response to Read Partition Query with terminal capabilities:
-- Usable Area (24x80)
-- Color support
-- Highlighting support
-- Character sets
-- Reply modes
+Built like x3270's, every length computed: Summary, Usable Area (24x80, 1920-cell buffer), Alphanumeric
+Partitions, Character Sets (CP 037), Color, Highlighting, Reply Modes (field, extended field), Implicit Partition (24x80, alternate
+24x80). The Summary lists exactly the replies that are sent.
+
+### Code page
+EBCDIC CP 037 through Python's built-in `cp037` codec (all of Latin-1, including `[ ] ^`).
+
+### Not implemented
+TLS negotiated in-band (START_TLS on port 23; implicit TLS with `-t` works), IND$FILE file transfer, DBCS,
+models larger than 3278-2 (24x80), printer sessions, insert mode, type-ahead, and character reply mode (not
+advertised in the query reply).
 
 ## Project Structure
 
 ```
 python3270/
 ├── python3270.py      # Main entry point and Qt application setup
-├── main_window.py     # Main window with UI layout and AID handling
+├── main_window.py     # Main window; hands network events to the GUI thread
 ├── terminal_widget.py # Terminal display widget with keyboard input
-├── connection.py      # TN3270 TCP/TLS connection and protocol handler
-├── screen.py          # Screen buffer model and field tracking
+├── connection.py      # TCP/TLS, telnet state machine, TN3270E negotiation and records (no Qt)
+├── session.py         # Glue: host records -> screen -> responses; keys -> inbound records (no Qt)
+├── screen.py          # Screen buffer, 3270 data stream processing, reads (no Qt)
+├── query.py           # Query Reply structured fields
 ├── orders.py          # TN3270 protocol constants and utilities
-├── ebcdic.py          # EBCDIC/ASCII character conversion tables
+├── ebcdic.py          # EBCDIC CP 037 conversion
+├── tests/             # pytest suite, incl. an end-to-end TN3270E host simulation
 ├── requirements.txt   # Python dependencies
 ├── fonts/             # IBM 3270 font files
 │   ├── 3270-Regular.ttf
